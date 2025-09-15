@@ -1,12 +1,8 @@
-
-
-
-
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
+import PayButton from "../razorpay/pay-button";
 
-// ✅ Define the type of your table row
 type Ride = {
   ride_id: string;
   ride_name: string;
@@ -18,9 +14,9 @@ type Ride = {
 
 type Booking = {
   ride_id: string;
-  booking_date: string; // yyyy-mm-dd
-  start_time: string;   // hh:mm
-  end_time: string;     // hh:mm
+  booking_date: string;
+  start_time: string;
+  end_time: string;
 };
 
 export default function PackagesSection() {
@@ -38,8 +34,15 @@ export default function PackagesSection() {
   const [people, setPeople] = useState(1);
   const [successOpen, setSuccessOpen] = useState(false);
 
-  // store booked slots
   const [bookedSlots, setBookedSlots] = useState<Booking[]>([]);
+  const [userId, setUserId] = useState<string>("");
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      if (data?.user?.id) setUserId(data.user.id);
+    })();
+  }, []);
 
   useEffect(() => {
     const fetchRides = async () => {
@@ -48,18 +51,13 @@ export default function PackagesSection() {
         .select("*")
         .eq("available", true);
 
-      if (error) {
-        console.error(error);
-      } else if (data) {
-        setRides(data as Ride[]);
-      }
+      if (!error && data) setRides(data as Ride[]);
       setLoading(false);
     };
 
     fetchRides();
   }, []);
 
-  // 🔹 Fetch already booked slots whenever date changes
   useEffect(() => {
     const fetchBookedSlots = async () => {
       if (!date || !selectedRide) return;
@@ -69,11 +67,7 @@ export default function PackagesSection() {
         .eq("ride_id", selectedRide.ride_id)
         .eq("booking_date", date);
 
-      if (error) {
-        console.error(error);
-      } else if (data) {
-        setBookedSlots(data as Booking[]);
-      }
+      if (!error && data) setBookedSlots(data as Booking[]);
     };
 
     fetchBookedSlots();
@@ -91,13 +85,39 @@ export default function PackagesSection() {
     setOpenBooking(true);
   };
 
-  const handleBookingSubmit = async () => {
+  const checkSlotConflict = async (
+    rideId: string,
+    bookingDate: string,
+    startTime: string,
+    endTime: string
+  ): Promise<boolean> => {
+    const { data, error } = await supabase
+      .from("bookings")
+      .select("start_time, end_time")
+      .eq("ride_id", rideId)
+      .eq("booking_date", bookingDate);
+
+    if (error) {
+      console.error(error);
+      return true;
+    }
+
+    return (
+      data?.some(
+        (b) =>
+          (startTime >= b.start_time && startTime < b.end_time) ||
+          (endTime > b.start_time && endTime <= b.end_time) ||
+          (startTime <= b.start_time && endTime >= b.end_time)
+      ) ?? false
+    );
+  };
+
+  const handleBookingAfterPayment = async () => {
     if (!name || !phone || !selectedRide || !date || !time) {
       alert("Please fill all required fields");
       return;
     }
 
-    // Calculate end_time = start_time + ride duration
     const [hours, minutes] = time.split(":").map(Number);
     const end = new Date();
     end.setHours(hours, minutes + selectedRide.duration_minutes);
@@ -106,19 +126,6 @@ export default function PackagesSection() {
       .toString()
       .padStart(2, "0")}`;
 
-    // 🔹 Check if slot already booked
-    const conflict = bookedSlots.some(
-      (b) =>
-        (time >= b.start_time && time < b.end_time) || // overlaps existing booking
-        (end_time > b.start_time && end_time <= b.end_time)
-    );
-
-    if (conflict) {
-      alert("This slot is already booked. Please choose another time.");
-      return;
-    }
-
-    // Insert booking into supabase table
     const { error } = await supabase.from("bookings").insert([
       {
         ride_id: selectedRide.ride_id,
@@ -126,7 +133,8 @@ export default function PackagesSection() {
         start_time: time,
         end_time,
         status: "confirmed",
-        payment_status: "pending",
+        payment_status: "paid",
+        user_id: userId,
       },
     ]);
 
@@ -177,19 +185,14 @@ export default function PackagesSection() {
             </h2>
             <p className="text-gray-600 mb-2">{selectedRide.description}</p>
 
-            {/* Dynamic Price */}
             <p className="font-bold text-red-500 mb-4">
               Price: ₹{selectedRide.price}
-              <span
-                className="text-green-600"
-                style={{ marginLeft: "100px" }}
-              >
+              <span className="text-green-600 ml-6">
                 Total Price :₹{selectedRide.price * people}
               </span>{" "}
               ({selectedRide.duration_minutes} mins)
             </p>
 
-            {/* Booking Form */}
             <input
               type="text"
               placeholder="Your Name"
@@ -213,7 +216,6 @@ export default function PackagesSection() {
               <option value="Bangalore">Bangalore</option>
             </select>
 
-            {/* Date and Time */}
             <input
               type="date"
               value={date}
@@ -227,7 +229,6 @@ export default function PackagesSection() {
               className="w-full border rounded px-3 py-2 mb-3"
             />
 
-            {/* Number of People */}
             <div className="flex items-center justify-between mb-4">
               <span className="font-medium">No. of People:</span>
               <div className="flex items-center gap-3">
@@ -249,12 +250,39 @@ export default function PackagesSection() {
               </div>
             </div>
 
-            <button
-              onClick={handleBookingSubmit}
-              className="w-full bg-red-500 text-white py-2 rounded hover:scale-105 transition"
-            >
-              Confirm Booking
-            </button>
+            {/* ✅ Conflict check BEFORE Razorpay */}
+            <PayButton
+              rideId={selectedRide.ride_id}
+              amount={selectedRide.price * people}
+              userId={userId}
+              disabled={!name || !phone || !date || !time || !userId}
+              beforePayment={async () => {
+                const [hours, minutes] = time.split(":").map(Number);
+                const end = new Date();
+                end.setHours(hours, minutes + selectedRide.duration_minutes);
+                const end_time = `${end
+                  .getHours()
+                  .toString()
+                  .padStart(2, "0")}:${end
+                  .getMinutes()
+                  .toString()
+                  .padStart(2, "0")}`;
+
+                const hasConflict = await checkSlotConflict(
+                  selectedRide.ride_id,
+                  date,
+                  time,
+                  end_time
+                );
+
+                if (hasConflict) {
+                  alert("⚠️ This slot is already booked. Please choose another time.");
+                  return false; // ❌ stop Razorpay
+                }
+                return true; // ✅ allow Razorpay
+              }}
+              onSuccess={handleBookingAfterPayment}
+            />
           </div>
         </div>
       )}
@@ -281,10 +309,3 @@ export default function PackagesSection() {
     </section>
   );
 }
-
-
-
-
-
-
-
