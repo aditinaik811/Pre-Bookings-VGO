@@ -58,21 +58,6 @@ export default function PackagesSection() {
     fetchRides();
   }, []);
 
-  useEffect(() => {
-    const fetchBookedSlots = async () => {
-      if (!date || !selectedRide) return;
-      const { data, error } = await supabase
-        .from("bookings")
-        .select("ride_id, booking_date, start_time, end_time")
-        .eq("ride_id", selectedRide.ride_id)
-        .eq("booking_date", date);
-
-      if (!error && data) setBookedSlots(data as Booking[]);
-    };
-
-    fetchBookedSlots();
-  }, [date, selectedRide]);
-
   const handleOpenBooking = (ride: Ride) => {
     setSelectedRide(ride);
     setName("");
@@ -85,17 +70,20 @@ export default function PackagesSection() {
     setOpenBooking(true);
   };
 
+  // Updated checkSlotConflict to include location
   const checkSlotConflict = async (
     rideId: string,
     bookingDate: string,
     startTime: string,
-    endTime: string
+    endTime: string,
+    location: string
   ): Promise<boolean> => {
     const { data, error } = await supabase
       .from("bookings")
       .select("start_time, end_time")
       .eq("ride_id", rideId)
-      .eq("booking_date", bookingDate);
+      .eq("booking_date", bookingDate)
+      .eq("location", location);
 
     if (error) {
       console.error(error);
@@ -125,6 +113,21 @@ export default function PackagesSection() {
       .getMinutes()
       .toString()
       .padStart(2, "0")}`;
+
+    // Check if the selected slot conflicts with an existing booking
+    const conflict = await checkSlotConflict(
+      selectedRide.ride_id,
+      date,
+      time,
+      end_time,
+      location
+    );
+    if (conflict) {
+      alert(
+        "The selected time slot is already booked. Please choose a different time."
+      );
+      return;
+    }
 
     const { error } = await supabase.from("bookings").insert([
       {
@@ -275,16 +278,17 @@ export default function PackagesSection() {
                   selectedRide.ride_id,
                   date,
                   time,
-                  end_time
+                  end_time,
+                  location
                 );
 
                 if (hasConflict) {
                   alert(
-                    "⚠️ This slot is already booked. Please choose another time."
+                    "⚠️ This slot at the selected location is already booked. Please choose another time."
                   );
-                  return false; // ❌ stop Razorpay
+                  return false;
                 }
-                return true; // ✅ allow Razorpay
+                return true;
               }}
               onSuccess={handleBookingAfterPayment}
             />
