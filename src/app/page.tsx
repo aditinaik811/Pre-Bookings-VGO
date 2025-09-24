@@ -135,6 +135,9 @@ export default function PackagesSection() {
         status: "confirmed",
         payment_status: "paid",
         user_id: userId,
+        name: name,
+        phone: phone,
+        location: location,
       },
     ]);
 
@@ -276,7 +279,9 @@ export default function PackagesSection() {
                 );
 
                 if (hasConflict) {
-                  alert("⚠️ This slot is already booked. Please choose another time.");
+                  alert(
+                    "⚠️ This slot is already booked. Please choose another time."
+                  );
                   return false; // ❌ stop Razorpay
                 }
                 return true; // ✅ allow Razorpay
